@@ -1628,6 +1628,7 @@ class Graph(object):
     for op_id in sorted(self._nodes_by_id):
       op = self._nodes_by_id[op_id]
       if from_version is None or op_id > from_version:
+        # [R] 如果 from_version存在，那么 from_version 之后不会存在删除的点？？？
         graph.node.extend([op.node_def])
         bytesize += op.node_def.ByteSize()
         if bytesize >= (1 << 31) or bytesize < 0:
@@ -1720,6 +1721,7 @@ class Graph(object):
       ret._set_device(device_function(ret))
     return ret
 
+  # [R] 其实就是将 obj 转成 graph 中的 Operation 或者 Tensor
   def as_graph_element(self, obj, allow_tensor=True, allow_operation=True):
     """Returns the object referred to by `obj`, as an `Operation` or `Tensor`.
 

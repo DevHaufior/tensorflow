@@ -59,6 +59,7 @@ static Status FeedInputs(Graph* g, const DeviceAttributes& device_info,
 
     Node* recv_node;
     TF_RETURN_IF_ERROR(
+        // [R] 可以学习学习 NodeBuilder 这种设计模式
         NodeBuilder(strings::StrCat("_recv_", id.first, "_", id.second),
                     "_Recv")
             .Attr("tensor_type", BaseType(n->output_type(id.second)))
@@ -232,12 +233,14 @@ Status RewriteGraphForExecution(
   // Add the feeds.  This may replace nodes in the graph, including the nodes
   // currently listed in "fetch_nodes".  We pass "name_index" so the index is
   // kept up to date.
+  // [R]  修改 graph, 将fed_outputs 这些 tensor 对应的 op Node，对应新增 recv_node Node，并与 source node 建立控制依赖
   if (!fed_outputs.empty()) {
     TF_RETURN_IF_ERROR(FeedInputs(g, device_info, fed_outputs, &name_index));
   }
 
   // Add the fetch nodes, also updating "name_index".
   std::vector<Node*> fetch_nodes;
+  // [R]  修改 graph, fetch_outputs 这些 tensor 对应新增 send_node Node,并与 sink node 建立控制依赖
   if (!fetch_outputs.empty()) {
     TF_RETURN_IF_ERROR(
         FetchOutputs(g, device_info, fetch_outputs, &name_index, &fetch_nodes));
@@ -245,6 +248,7 @@ Status RewriteGraphForExecution(
 
   // Prune the graph to only compute what is needed for the fetch nodes and the
   // targets nodes.
+  // [R]根据 fetch_nodes和target_node_names 逆序深度优先遍历 Node，移除未遍历到的 Node，完成图的修剪
   if (!fetch_nodes.empty() || !target_node_names.empty()) {
     TF_RETURN_IF_ERROR(
         PruneForTargets(g, name_index, fetch_nodes, target_node_names));

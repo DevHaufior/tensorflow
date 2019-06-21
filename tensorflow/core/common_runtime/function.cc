@@ -165,6 +165,7 @@ static Node* AddSymGrad(Graph* g, Node* n, gtl::ArraySlice<Endpoint> grads) {
 }
 
 class ArgOp : public OpKernel {
+  // [R] ArgOp 用于从FunctionCallFrame中获取外部设置到其内部的value，
  public:
   explicit ArgOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("T", &dtype_));
@@ -194,6 +195,7 @@ REGISTER_KERNEL_BUILDER(Name("_Arg").Device(DEVICE_CPU), ArgOp);
 REGISTER_KERNEL_BUILDER(Name("_Arg").Device(DEVICE_GPU), ArgOp);
 
 class RetvalOp : public OpKernel {
+  // [R] RetvalOp 用于将 value set 至FunctionCallFrame，供外部获取
  public:
   explicit RetvalOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("T", &dtype_));

@@ -56,6 +56,7 @@ void GetReversePostOrder(const Graph& g, std::vector<Node*>* order) {
 
 void PruneForReverseReachability(Graph* g,
                                  const std::unordered_set<const Node*>& nodes) {
+  // [R] 根据 nodes 修剪 graph
   std::unordered_set<const Node*> visited;
 
   // Compute set of nodes that we need to traverse in order to reach
@@ -92,6 +93,7 @@ void PruneForReverseReachability(Graph* g,
 }
 
 void FixupSourceAndSinkEdges(Graph* g) {
+  // [R] 调整好 Source 和 Sink的边
   // Connect all nodes with no incoming edges to source.
   // Connect all nodes with no outgoing edges to sink.
   for (Node* n : g->nodes()) {

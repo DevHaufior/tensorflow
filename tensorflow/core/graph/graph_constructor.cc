@@ -26,6 +26,7 @@ inline bool IsMerge(const NodeDef& node_def) {
 namespace {
 
 class GraphConstructor {
+// 由 graphdef 去构建 Graph 的方法  
  public:
   GraphConstructor(const GraphConstructorOptions& opts, const GraphDef* gdef,
                    Graph* g, Status* status)
@@ -184,6 +185,7 @@ void GraphConstructor::InitFromEdges() {
 }
 
 Node* GraphConstructor::MakeNode(const NodeDef& node_def) {
+  // [R] todo
   // Add the node to the graph.
   Node* node = g_->AddNode(node_def, status_);
   if (node == nullptr) return nullptr;
@@ -209,6 +211,8 @@ void GraphConstructor::Convert() {
   std::vector<EdgeInfo> back_edges;
   int processed = 0;
   // Process the NodeDefs in topological order.
+  // [R] 拓扑排序构造图。ready_保存前驱节点已经构建完的node 的 id(在 graphdef)中
+  // pending_count_ 记录当前节点的前驱节点中未构建完的节点个数，初始值为当前节点的前驱节点个数，为0时，当前节点 id 加入 ready_中
   while (!ready_.empty()) {
     int o = ready_.back();
     ready_.pop_back();
@@ -237,6 +241,7 @@ void GraphConstructor::Convert() {
       DCHECK(iter != name_index_.end());
       Node* src_node = iter->second.node;
       if (in_control_dependence) {
+        // [R] 控制依赖边
         inputs.push_back(InputInfo(id.first, src_node, -1));
       } else {
         if (src_node == nullptr) {
@@ -251,6 +256,7 @@ void GraphConstructor::Convert() {
                                 src_node->num_outputs(), " outputs"));
             return;
           }
+          // [R] 边信息，表达 名为id.first 的src_node的第几个输出边至当前 o NodeDef
           inputs.push_back(InputInfo(id.first, src_node, id.second));
         }
       }
@@ -276,6 +282,7 @@ void GraphConstructor::Convert() {
         g_->AddControlEdge(inputs[i].node, node);
       } else {
         const Edge* edge =
+            // [R] AddEdge(起点,输出槽，终点，输入槽)
             g_->AddEdge(inputs[i].node, inputs[i].index, node, i);
         if (!TypeValidateEdge(edge)) return;
       }
@@ -292,6 +299,7 @@ void GraphConstructor::Convert() {
   }
 
   // Add the back edges after all nodes are created.
+  // [R] 可能需要了解一下 back_edge 都是一些什么 edge
   for (auto e : back_edges) {
     Node* src_node = name_index_[e.src_name].node;
     if (e.src_index == -1) {

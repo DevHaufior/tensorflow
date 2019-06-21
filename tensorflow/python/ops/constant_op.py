@@ -138,13 +138,19 @@ def constant(value, dtype=None, shape=None, name="Const"):
     A Constant Tensor.
   """
   g = ops.get_default_graph()
+
+  # [R] 跟后端协调好 value 和 dtype 的描述？？
   tensor_value = attr_value_pb2.AttrValue()
   tensor_value.tensor.CopyFrom(
       tensor_util.make_tensor_proto(value, dtype=dtype, shape=shape))
   dtype_value = attr_value_pb2.AttrValue(type=tensor_value.tensor.dtype)
+
+  # [R] 创建 OP
   const_tensor = g.create_op(
       "Const", [], [dtype_value.type],
       attrs={"value": tensor_value, "dtype": dtype_value}, name=name).outputs[0]
+
+
   return const_tensor
 
 

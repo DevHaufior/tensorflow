@@ -124,6 +124,7 @@ Graph::~Graph() {
 }
 
 Node* Graph::AddNode(const NodeDef& node_def, Status* status) {
+  // [R] 由 node_def 构建 Node 时，究竟 Node 里包含了哪些？ 以及 ops_起到了什么作用？？
   const OpDef* op_def = ops_->LookUp(node_def.op(), status);
   if (op_def == nullptr) return nullptr;
 

@@ -146,6 +146,7 @@ Status LocalSession::Extend(const GraphDef& graph) {
 
 Status LocalSession::ExtendLocked(const GraphDef& graph) {
   graph_created_ = true;  // In case this is first call
+  // [R] 暂时不了解 Merge 是如何做的
   graph_def_.MergeFrom(graph);
   return Status::OK();
 }
@@ -154,6 +155,8 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
                          const std::vector<string>& output_names,
                          const std::vector<string>& target_nodes,
                          std::vector<Tensor>* outputs) {
+
+  // [R] 非常巧妙的一段代码，线程间的异步与同步，值得细致的学习。
   {
     mutex_lock l(graph_def_lock_);
     if (!graph_created_) {
@@ -171,12 +174,15 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
 
   // Check if we already have an executor for these arguments.
   ExecutorsAndKeys* executors_and_keys;
+  // [R] 每个 device 对应一个子图，每个子图对应一个 Executor，Executor 里初始化了子图里的Node 对应的 op
+  // 对于 input_tensor_names 和 output_names对应的RendezvousKey也保存在executors_and_keys 里了
   Status s = GetOrCreateExecutors(input_tensor_names, output_names,
                                   target_nodes, &executors_and_keys);
   if (!s.ok()) {
     return s;
   }
 
+  // [R] IntraProcessRendezvous 待看？？？
   IntraProcessRendezvous* rendez =
       new IntraProcessRendezvous(device_mgr_.get());
   core::ScopedUnref rendez_unref(rendez);
@@ -185,6 +191,8 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
   // rendezvous key.
   for (const auto& input : inputs) {
     const string& input_key = executors_and_keys->input_keys[input.first];
+    // [R] 通过rendez往其中的 table 投喂外部输入值，其后会由 Recv Op 作为consumer通过rendez从table中取值
+    // [R] 对于rendez来说，此时这个方法调用者是producer,Recv OP 是 consumer
     s = rendez->Send(input_key, Rendezvous::Args(), input.second, false);
     if (!s.ok()) {
       rendez->StartAbort(s);
@@ -196,11 +204,12 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
   Notification executors_done;
   const int num_executors = executors_and_keys->device_executors.size();
   ExecutorBarrier* barrier = new ExecutorBarrier(
+     // [R] 注意，这里rendez也传了进来，目前看下来是可以通过rendez发送 abort 信号
       num_executors, rendez, [&executors_done, &s](const Status& ret) {
         s = ret;
         executors_done.Notify();
       });
-
+  // [R] args 中藏有rendezvous
   Executor::Args args;
   args.rendezvous = rendez;
   args.cancellation_manager = cancellation_manager_;
@@ -208,6 +217,7 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
 
   for (auto device_executor : executors_and_keys->device_executors) {
     Executor* exec = device_executor.second;
+    // [R] rendezvous通过 args 发送至 Executor 中
     exec->RunAsync(args, barrier->Get());
   }
 
@@ -228,6 +238,9 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
     bool is_dead;
 
     // Fetch data from the Rendezvous.
+    // [R] 从rendez中根据 output_key拿输出的 tensor
+    // [R] 对于rendez来说，此时这个方法调用者是consumer,从rendez的 table 里取值
+    // SendOp 作为 producer，将最终的结果放至rendez的 table里
     s = rendez->Recv(output_key, Rendezvous::Args(), &output_tensor, &is_dead);
     if (is_dead) {
       s = errors::InvalidArgument("The tensor returned for ",
@@ -247,6 +260,7 @@ Status LocalSession::Run(const std::vector<std::pair<string, Tensor>>& inputs,
 }
 
 Status LocalSession::GetOrCreateExecutors(
+
     gtl::ArraySlice<string> inputs, gtl::ArraySlice<string> outputs,
     gtl::ArraySlice<string> target_nodes,
     ExecutorsAndKeys** executors_and_keys) {
@@ -280,6 +294,12 @@ Status LocalSession::GetOrCreateExecutors(
   // The executor_lock_ is intentionally released while executor is
   // being created.
   std::unordered_map<string, Graph*> graphs;
+  // [R] (1) ConvertGraphDefToGraph，构建图
+  //     (2) RewriteGraphForExecution, 根据 inputs/outputs/target_nodes，插入替换插入Send/Recv Node 后修剪图,
+  //     (3) Partition，根据 devices 分割图。由 device 划分子图，对于跨 device 的edge，分数据边还是控制边，插入相应Send、Recv等点
+  //         。需要注意的是此时的子图是 GraphDef 形式，在 Send和 Recv Node中都保存了该 send<->recv 对的信息，目前看到的是 device 信息，
+  //         且似乎并没有对 Graph 中的 Send/Recv Node 做合并，逻辑上依旧保留多个 Send和 Recv Nodes.
+  //     (4) 由 GraphDef表达的子图 转换成 Graph表达。
   Status s = CreateGraphs(inputs, outputs, target_nodes, &graphs);
   if (!s.ok()) {
     return s;
@@ -298,6 +318,7 @@ Status LocalSession::GetOrCreateExecutors(
 
   std::unique_ptr<ExecutorsAndKeys> ek(new ExecutorsAndKeys);
 
+  // [R] 创建Executors {partition_name: Executor(graph)}
   for (const auto& graph : graphs) {
     const string& partition_name = graph.first;
     Graph* partition_graph = graph.second;
@@ -319,6 +340,7 @@ Status LocalSession::GetOrCreateExecutors(
     };
 
     Executor* tmp_exec;
+    // [R] todo 具体创建 Executor 的过程待看
     s = NewLocalExecutor(params, partition_graph, &tmp_exec);
     if (!s.ok()) {
       return s;
@@ -326,6 +348,7 @@ Status LocalSession::GetOrCreateExecutors(
     ek->device_executors.insert(std::make_pair(graph.first, tmp_exec));
   }
 
+  // [R] 下面这段属于 rendezvous 部分的内容，稍后看
   // Compute the rendezvous keys to avoid recomputing them every time.
   //
   // We always use the first device as the device name portion of the
@@ -379,14 +402,18 @@ Status LocalSession::CreateGraphs(gtl::ArraySlice<string> feeds,
                                   gtl::ArraySlice<string> fetches,
                                   gtl::ArraySlice<string> target_nodes,
                                   std::unordered_map<string, Graph*>* outputs) {
+  // [R] 根据feeds/fetchs/target_nodes 划分 graph 为subgraphs
   Graph graph(OpRegistry::Global());
   GraphConstructorOptions opts;
 
   {
     mutex_lock l(graph_def_lock_);
+    // [R]由 graph_def 创建 graph，基本思路就是解析 op:output_index 等，拓扑排序的方式构建 Node，最终对 source 和 sink
+    // 添加相关的控制依赖
     TF_RETURN_IF_ERROR(ConvertGraphDefToGraph(opts, graph_def_, &graph));
   }
-
+  // [R] 根据feeds，插入 Recv Node，根据fetches，插入 Send Node，根据 Send Nodes + target_nodes， 修剪 Graph，得到
+  // 移除未参与计算的Node
   TF_RETURN_IF_ERROR(subgraph::RewriteGraphForExecution(
       &graph, feeds, fetches, target_nodes,
       device_set_.client_device()->attributes()));
@@ -401,7 +428,9 @@ Status LocalSession::CreateGraphs(gtl::ArraySlice<string> feeds,
   {
     mutex_lock l(mu_);
     // Restore stateful nodes.
+    // [R] 对于像 params、queue 类的 Node，是 stateful node，保持原有的设备分配
     RestoreStatefulNodes(&graph);
+    // [R] todo 值得后续细看，主要是为 graph 中的 node指定 device
     TF_RETURN_IF_ERROR(placer.Run());
     // Save stateful nodes.
     SaveStatefulNodes(&graph);
@@ -423,6 +452,9 @@ Status LocalSession::CreateGraphs(gtl::ArraySlice<string> feeds,
     return 1;
   };
   popts.control_flow_added = false;
+  // [R] 目测是根据 device_name 去划分节点，在跨 device 的 edge 上，根据是数据依赖还是控制依赖
+  // 增加 Send/Recv 等相关节点
+  // Send/Recv 节点保留了与对方通信的信息。此时，就将 graph 划分成了 subgraph 保存在 partitions 中
   TF_RETURN_IF_ERROR(Partition(popts, &graph, &partitions));
 
   std::vector<string> device_names;
@@ -445,6 +477,7 @@ Status LocalSession::CreateGraphs(gtl::ArraySlice<string> feeds,
     }
   }
 
+  // [R] 根据 Partitions 构建子图
   for (const auto& partition : partitions) {
     const string& partition_name = partition.first;
 

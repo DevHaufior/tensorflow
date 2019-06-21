@@ -107,6 +107,7 @@ class LocalRendezvousImpl : public Rendezvous {
           // Should not happen unless it has a waiter.
           return errors::Aborted("Duplicated send: ", key);
         }
+        // [R] 表明该条 Message 已经被 Consumer 消费了，所以做了相关的设置操作
         // Mark item as complete.
         item->has_been_recvd = true;
         waiter = item->waiter;
@@ -128,7 +129,11 @@ class LocalRendezvousImpl : public Rendezvous {
     }  // mutex
     // Notify the waiter by invoking its done closure, outside scope
     // of the table lock.
+    // [R] 表示 consumer早于 producer发出要 val的请求，并且consumer在那个时候设置了回调函数waiter
+    // [R] 当 producer端产生val时，会直接调用 consumer 设置的 callback，借此机会把val 送到阻塞等待 val 的consumer
+    // [R] 驱动 consumer 继续往下走。
     waiter(Status::OK(), send_args, recv_args, val, is_dead);
+    
     if (recv_args.device_context) recv_args.device_context->Unref();
     return Status::OK();
   }
@@ -146,6 +151,7 @@ class LocalRendezvousImpl : public Rendezvous {
     }
     Table::iterator iter = table_.find(key);
     if (iter != table_.end()) {
+      // [R]找到 table_中有该 Key
       Item* item = iter->second;
       if (item->has_been_recvd && !tolerate_dup_recv_) {
         mu_.unlock();
@@ -187,7 +193,7 @@ class LocalRendezvousImpl : public Rendezvous {
     // waiting table. The done closure will be invoked when the
     // message arrives.
     Item* item = new Item;
-    item->waiter = done;
+    item->waiter = done; // [R] 此处由 Consumer 设置了获取 tensor value 的回调函数，由 Producer 调用
     if (recv_args.device_context) {
       item->recv_dev_context = recv_args.device_context;
       item->recv_alloc_attrs = recv_args.alloc_attrs;
@@ -244,6 +250,10 @@ class LocalRendezvousImpl : public Rendezvous {
 
   // TODO(zhifengc): shard table_.
   mutex mu_;
+  // [R] LocalRendezvousImpl里的 table，作为producer和 consumer 二者间交换message(tensor value)
+  // 桌面，两个人都有可能早于对方先到
+  // (1) 如果 producer 先到，producer 将包含 val 的Item放入到table中，Consumer需要时直接取用,调用 callback完成值的获取
+  // (2) 如果 consumer 先到,consumer 将包含 callback 的Item 放入到 table 后转入等待，producer 产生val后，调用 item里的callback，将值送到 consumer 那儿 
   Table table_ GUARDED_BY(mu_);
   Status status_;
 

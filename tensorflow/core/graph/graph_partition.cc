@@ -77,9 +77,9 @@ typedef std::unordered_map<std::pair<int, int>, MemoryType, PairIntHash>
 // We collect the following information about the graph before performing
 // graph partitioning.
 struct GraphInfo {
-  std::vector<DeviceType> device_types;
-  MemoryTypeMap input_types;
-  MemoryTypeMap output_types;
+  std::vector<DeviceType> device_types; // [R] 记录每个 Node_id 对应CPU/GPU
+  MemoryTypeMap input_types; // [R]input_types[{node_id, i}] = input_memory_types[i]; HOST_MEMORY / DEVICE_MEMORY
+  MemoryTypeMap output_types; // [R]output_types[{node_id, i}] = output_memory_types[i];
   std::vector<ControlFlowInfo> cf_info;
 };
 
@@ -150,6 +150,7 @@ void AddReadControl(const std::vector<NodeDef*>& recvs,
 
 void SetSendRecvAttrs(const PartitionOptions& opts, const Edge* edge,
                       NodeDefBuilder* builder) {
+  // [R] 已经将 Send/Recv pair 对的信息记录在了 Send 和 Recv 的Node Def 中
   builder->Attr("tensor_name",
                 strings::StrCat("edge_", edge->id(), "_", edge->src()->name()));
   builder->Attr("send_device", edge->src()->assigned_device_name());
@@ -179,6 +180,7 @@ NodeDef* AddSend(const PartitionOptions& opts, const GraphInfo& g_info,
 
   // Add a cast node that casts dtype to cast_dtype.
   // NOTE(yuanbyu): Only cast for cross-device send/recv.
+  // [R] 根据具体情况添加 Cast Node，再次重置 send_from
   if (dtype != cast_dtype && !NeedSameDeviceSendRecv(edge, g_info)) {
     const string cast_op = (host_memory) ? "_HostCast" : "Cast";
     NodeDefBuilder cast_builder(opts.new_name(src->name()), cast_op);
@@ -198,6 +200,7 @@ NodeDef* AddSend(const PartitionOptions& opts, const GraphInfo& g_info,
   // Add the send node.
   const string send_op = (host_memory) ? "_HostSend" : "_Send";
   NodeDefBuilder send_builder(opts.new_name(src->name()), send_op);
+  // [R] 已经将 Send/Recv pair 对的信息记录在了 Send 和 Recv 的Node Def 中
   SetSendRecvAttrs(opts, edge, &send_builder);
   send_builder.Device(src->assigned_device_name()).Input(send_from);
   if (opts.scheduling_for_recvs) {
@@ -579,6 +582,7 @@ Status BuildMemoryDeviceInfo(const Graph& g, GraphInfo* info) {
     input_memory_types.resize(node->num_inputs());
     output_memory_types.clear();
     output_memory_types.resize(node->num_outputs());
+    // [R] 从 Node 的 op 的角度出发，得到 Node 的 inputs 和 outputs 对应的MEMORY 类型，即HOST_MEMORY或 DEVICE_MOMERY
     status = MemoryTypesForNode(g.op_registry(), DeviceType(parsed.type),
                                 node->def(), &input_memory_types,
                                 &output_memory_types);
@@ -833,11 +837,16 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     // new graph is an equivalent transformation of the original graph and
     // has the property that it can be subsequently partitioned arbitrarily
     // (down to the level of individual device) for distributed execution.
+    // [R] 似乎是一些对条件，如 if，loop 等逻辑流的处理，暂时跳过，之后细究？？？
     status = AddControlFlow(opts, g, &g_info);
     if (!status.ok()) return status;
   }
   // At this point, all the graph mutations have been done. Build memory
   // and device type info for every node and edge in the graph.
+  // [R] 根据 Node 对应的 Op，分析op 的参数对应到的 Edge index 范围，得到:
+  // 每个 edge 的 Memory类型,HOST_MEMORY/DEVICE_MEMORY
+  // 每个 Node 的 device_type, CPU/GPU,
+  // 此类信息保存在 g_info 中
   status = BuildMemoryDeviceInfo(*g, &g_info);
   if (!status.ok()) return status;
 
@@ -901,6 +910,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
       GraphDef* src_graph = &(*partitions)[opts.node_to_loc(src)];
       if (src_graph == dst_graph && !NeedSameDeviceSendRecv(edge, g_info)) {
         // Same partition and compatible memory types:
+        // [R] 边的处理情况一： 在一个 Partition 中，直接为 dst_def 建立边即可
         AddInput(dst_def, src->name(), edge->src_output());
         if (edge->IsControlEdge() ||
             !IsRefType(src->output_type(edge->src_output()))) {
@@ -909,8 +919,8 @@ Status Partition(const PartitionOptions& opts, Graph* g,
         continue;
       }
 
-      int64 send_start_time = 0;
-      int64 recv_start_time = 0;
+      int64 send_start_time = 0; 
+      int64 recv_start_time = 0; // [R] todo 具体怎么设置值和怎么使用的？？
       if (opts.scheduling_for_recvs) {
         if (opts.need_to_record_start_times) {
           send_start_time = opts.start_times[src->id()].value();
@@ -931,7 +941,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
       // the same tensor/control from the src to dst partition.
       const bool on_host = IsDstInputOnHost(edge, g_info);
       DupRecvKey key{src->id(), edge->src_output(), dst_graph, on_host};
-      auto iter = dup_recv.find(key);
+      auto iter = dup_recv.find(key); //[R] todo 记录的是什么？？？
       if (iter != dup_recv.end()) {
         // We found one. Reuse the data/control transferred already.
         const string& recv_node_name = iter->second.recv->name();
@@ -949,6 +959,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
         continue;
       }
 
+      // [R] 当 src_graph 和 dst_graph 不同时，需要插入 Send/Recv Node
       NodeDefBuilder::NodeOut send_from;
       if (edge->IsControlEdge()) {
         // Insert a dummy const node that will generate a tiny
@@ -956,6 +967,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
         VLOG(1) << "Send/Recv control: " << src->assigned_device_name() << "["
                 << src->name() << "] -> " << dst->assigned_device_name() << "["
                 << dst->name() << "]";
+        // [R] src_graph 和 dst_graph 不同且edge 为控制依赖时 src-->dummy->send
         NodeDef* dummy = AddDummyConst(opts, src_graph, edge, &status);
         if (!status.ok()) return status;
         // Set the start time for this dummy node.
@@ -965,15 +977,18 @@ Status Partition(const PartitionOptions& opts, Graph* g,
         AddInput(dummy, src->name(), Graph::kControlSlot);
         send_from.Reset(dummy->name(), 0, DT_FLOAT);
       } else {
+        // [R] src_graph 和 dst_graph 不同且edge 为数据依赖时 src->send
         send_from.Reset(src->name(), edge->src_output(), EdgeType(edge));
       }
 
       // Need to split edge by placing matching send/recv nodes on
       // the src/dst sides of the edge.
+      // [R] 添加 Send  Node
       NodeDef* send = AddSend(opts, g_info, src_graph, edge, send_from,
                               send_start_time, &status);
       if (!status.ok()) return status;
 
+      // [R] 添加 Recv Node, recv ->dst, recv->cast->dst, recv->identity-->dst
       NodeDef* real_recv = nullptr;
       NodeDef* recv =
           AddRecv(opts, g_info, dst_graph, edge, &real_recv, &status);
@@ -1003,6 +1018,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
         // Memorize the send/recv pair, only if this is not a "ref" edge.
         // NOTE(yuanbyu): Collapsing ref edges requires extreme care so
         // for now we don't do it.
+        // [R] 什么情况下会用这个呢？
         dup_recv[key] = {recv, real_recv, recv_start_time};
         ref_control_inputs.push_back(recv->name());
       }
@@ -1024,6 +1040,8 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     // one before the transformation.
     // NOTE(yuanbyu): This may impact performance because it defers the
     // execution of recvs until all the other inputs become available.
+    // [R] 暂时看不明白ref_recvs和ref_control_inputs的意义和作用，以及虽然底层实现上是一个 send-revc，但是逻辑上
+    // Graph会保持住多个 RecvNode？？？？
     AddReadControl(ref_recvs, ref_control_inputs);
 
     // Add back this control edge for control flow if not used.

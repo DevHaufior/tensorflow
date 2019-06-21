@@ -453,6 +453,7 @@ SimplePlacer::SimplePlacer(Graph* graph, const DeviceSet* devices,
 SimplePlacer::~SimplePlacer() {}
 
 Status SimplePlacer::Run() {
+  // [R] Node 放置 Device 的算法, TODO???
   if (devices_->devices().empty()) {
     return errors::FailedPrecondition("No devices are registered");
   }

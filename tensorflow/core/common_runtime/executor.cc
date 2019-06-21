@@ -235,6 +235,7 @@ Status ExecutorImpl::Initialize() {
 
   // Preprocess every node in the graph to create an instance of op
   // kernel for each node;
+  // [R] 为 graph 中的每个 Node 创建 Kernel????,Kernel 到底是如何表达计算的？？
   for (const Node* n : graph_->nodes()) {
     const int id = n->id();
     NodeItem* item = &nodes_[id];
@@ -1613,7 +1614,8 @@ class SimpleExecutorState {
   // Contains a map from node id to the DeviceContext object that was
   // assigned by the device at the beginning of a step.
   DeviceContextMap device_context_map_;
-
+  
+  // [R] 存放的是本次执行时，整个 subgraph 的输入
   std::vector<Entry> input_tensors_;
 
   // Step-local resource manager.
@@ -1624,6 +1626,7 @@ class SimpleExecutorState {
 
   // How many active threads of computation are being used.  Same as
   // the number of pending Process() functions.
+  // [R] 而num_active_是等于执行the number of pending Process() functions.通过它确定当前子图是否执行完毕？？？
   std::atomic_int_fast32_t num_active_;
 
   mutex mu_;
@@ -1820,6 +1823,7 @@ Status SimpleExecutorState::PrepareInputs(
 }
 
 void SimpleExecutorState::Process(int id, int64 scheduled_usec) {
+  // [R] Executor 执行 graph 计算的核心！！！！！！！！！！
   const std::vector<NodeItem>& nodes = impl_->nodes_;
   ReadyNodeIds ready;
   std::deque<int> inline_ready;
@@ -1870,6 +1874,9 @@ void SimpleExecutorState::Process(int id, int64 scheduled_usec) {
     VLOG(1) << "Process node: " << id << " " << SummarizeNodeDef(node->def());
 
     // Prepares inputs.
+    // [R] 准备 inputs
+    // [R] 从当前SimpleExecutorState里维持的整个子图的input_tensors_里按照 Node 所需 input的 index begin,end,取
+    // [R] 引用到 input 里
     s = PrepareInputs(item, &inputs, &input_device_contexts);
     if (!s.ok()) {
       // Continue to process the nodes in 'inline_ready'.
@@ -1907,9 +1914,12 @@ void SimpleExecutorState::Process(int id, int64 scheduled_usec) {
       // Synchronous computes.
       OpKernelContext ctx(params);
       if (stats_collector_) nodestats::SetOpStart(stats);
+      // [R] device 执行其上的 op kernel计算，计算结果保存到至OpKernelContext里outputs_(按需分配)
       device->Compute(CHECK_NOTNULL(op_kernel), &ctx);
       if (stats_collector_) nodestats::SetOpEnd(stats);
-
+      // [R] 处理结果
+      // [R] (1)将当前做完计算的Node的output对应到输出边对应节点  dst Node input 位置，放置到input_tensors_上
+      // [R] (2)判断dst node 的所有输入是否 ready，是则加入到 ready 中，驱动计算
       s = ProcessOutputs(item, &ctx, &ready, stats);
       if (stats_collector_) nodestats::SetMemory(stats, &ctx);
       if (stats_collector_) {
@@ -1985,6 +1995,7 @@ Status SimpleExecutorState::ProcessOutputs(const NodeItem& item,
                                            OpKernelContext* ctx,
                                            ReadyNodeIds* ready,
                                            NodeExecStats* stats) {
+  // [R] 对于 OpKernel 单次计算的 结果的解析
   Status s = ctx->status();
   if (!s.ok()) {
     s = AttachDef(s, item.kernel->def());
@@ -2004,6 +2015,8 @@ Status SimpleExecutorState::ProcessOutputs(const NodeItem& item,
     device_context = dc_it->second;
   }
 
+  // [R] 从OpKernelContext的outputs_里取出结果放入临时的outputs变量中，同时对于OpKernelContext的outputs_
+  // 进行清空操作
   for (int i = 0; i < node->num_outputs(); ++i) {
     TensorValue val = ctx->release_output(i);
     // Sanity check of output tensor types.
@@ -2044,6 +2057,7 @@ Status SimpleExecutorState::ProcessOutputs(const NodeItem& item,
   if (!s.ok()) return s;
 
   // Clears inputs.
+  // [R] 对于该 Node 对应到SimpleExecutorState 里input_tensors_进行清空操作
   for (int i = 0; i < node->num_inputs(); ++i) {
     input_tensors_[item.input_start + i].val = *kEmptyTensor;
   }
@@ -2051,6 +2065,8 @@ Status SimpleExecutorState::ProcessOutputs(const NodeItem& item,
   // Propagates outputs along out edges.
   ready->clear();
   const std::vector<NodeItem>& nodes = impl_->nodes_;
+  // [R] (1)将当前做完计算的Node的output对应到输出边对应节点  dst Node input 位置，放置到input_tensors_上
+  // [R] (2)判断dst node 的所有输入是否 ready，是则加入到 ready 中，驱动计算
   for (const Edge* e : node->out_edges()) {
     const int src_slot = e->src_output();
     const int dst_id = e->dst()->id();

@@ -291,13 +291,17 @@ class BaseSession(SessionInterface):
 
     fetch_info = []
     for fetch in fetches:
+      # [R] 对于每个要 fetch 的点，可能会展开多个点subfetches，
+      # 而fetch_contraction_fn则是描述了如何把展开后多个点合并成最终的 fetch 点
       subfetches, fetch_contraction_fn = _fetch_fn(fetch)
       subfetch_names = []
       for subfetch in subfetches:
         try:
+          # [R] 对于要 fetch 的点可以是 tensor，也可以是 op
           fetch_t = self.graph.as_graph_element(subfetch, allow_tensor=True,
                                                 allow_operation=True)
           if isinstance(fetch_t, ops.Operation):
+            # [R] 记录汇总的要计算的点
             target_list.append(fetch_t.name)
           else:
             subfetch_names.append(fetch_t.name)
@@ -311,7 +315,10 @@ class BaseSession(SessionInterface):
         except KeyError as e:
           raise ValueError('Fetch argument %r of %r cannot be interpreted as a '
                            'Tensor. (%s)' % (subfetch, fetch, e.message))
+
+      # [R] 记录汇总的该fetch的点，注意 target_list 中记录的可能是必须要计算的点，
       unique_fetch_targets.update(subfetch_names)
+      # [R] 记录展开后的subfetch_names及对应的如何对结果进行合并的函数
       fetch_info.append((subfetch_names, fetch_contraction_fn))
 
     unique_fetch_targets = list(unique_fetch_targets)
@@ -324,6 +331,7 @@ class BaseSession(SessionInterface):
       for feed, feed_val in feed_dict.iteritems():
         for subfeed, subfeed_val in _feed_fn(feed, feed_val):
           try:
+            # [R] 对于要 feed 的点，只能是 tensor
             subfeed_t = self.graph.as_graph_element(subfeed, allow_tensor=True,
                                                     allow_operation=False)
           except Exception as e:
@@ -342,6 +350,7 @@ class BaseSession(SessionInterface):
           feed_dict_string[str(subfeed_t.name)] = np_val
 
     # Run request and get response.
+    # [R] 真正发生计算的地方
     results = self._do_run(target_list, unique_fetch_targets, feed_dict_string)
 
     # User may have fetched the same tensor multiple times, but we
@@ -390,6 +399,7 @@ class BaseSession(SessionInterface):
 
           try:
             status = tf_session.TF_NewStatus()
+            # [R] 图变动时，通过 C API，统一 extend graph
             tf_session.TF_ExtendGraph(
                 self._session, graph_def.SerializeToString(), status)
             if tf_session.TF_GetCode(status) != 0:
@@ -398,8 +408,9 @@ class BaseSession(SessionInterface):
           finally:
             tf_session.TF_DeleteStatus(status)
 
+          # [R] session中维持当前通信的最新的 version
           self._current_version = self._graph.version
-
+      # [R] 通过 C api 调用 C++后端执行
       return tf_session.TF_Run(self._session, feed_dict, fetch_list,
                                target_list)
 

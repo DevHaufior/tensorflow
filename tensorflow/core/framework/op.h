@@ -64,6 +64,7 @@ class OpRegistry : public OpRegistryInterface {
   string DebugString(bool include_internal) const;
 
   // A singleton available at startup.
+  // [R] 单例的实现方法
   static OpRegistry* Global();
 
  private:

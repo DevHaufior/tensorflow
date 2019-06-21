@@ -72,6 +72,8 @@ class OpKernel {
   // Synchronous compute.
   //
   // "context" is guaranteed to be alive until Compute() returns.
+  // [R] OpKernel 的计算，分为 异步和同步两种计算方式，常规的 OpKernel 为同步，对于像 network receive operations 一般为异步(使用多线程)
+  // [R] 对于opkerenl 计算的输入读取和输出的写入都是通过context来进行
   virtual void Compute(OpKernelContext* context) = 0;
 
   // Returns nullptr iff this op kernel is synchronous.
@@ -846,7 +848,7 @@ class OpKernelContext {
                                             // wrapped allocator
   mutable mutex mu_;  // mutable so const accessors can acquire the lock
   gtl::InlinedVector<WrappedAllocator, 4> wrapped_allocators_ GUARDED_BY(mu_);
-  gtl::InlinedVector<TensorValue, 4> outputs_;
+  gtl::InlinedVector<TensorValue, 4> outputs_; // [R] OpKernelContext里保持计算好的结果
   gtl::InlinedVector<AllocationType, 4> output_allocation_types_;
   gtl::InlinedVector<Tensor*, 4> temp_tensors_;
   bool is_output_dead_ = false;
@@ -1085,6 +1087,7 @@ inline Status OpKernelContext::allocate_output(int index,
   Tensor* output_tensor = new Tensor();
   Status s = allocate_tensor(type, shape, output_tensor, attr);
   if (s.ok()) {
+    // [R] OpKernel 计算是分配 result tensor 至OpKernelContext 空间中
     outputs_[index] = TensorValue(output_tensor);
     *output = outputs_[index].tensor;
   }

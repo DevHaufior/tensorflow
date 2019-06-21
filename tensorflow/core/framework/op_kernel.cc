@@ -666,6 +666,10 @@ Status MemoryTypesForNode(DeviceType device_type, const NodeDef& ndef,
                           MemoryTypeVector* output_memory_types) {
   Status status;
   const KernelRegistration* registration;
+  // [R] This maps from 'op_type' + DeviceType to the set of KernelDefs and
+  // factory functions for instantiating the OpKernel that matches the
+  // KernelDef.
+  // [R] 找到'op_type' + DeviceType对应的KernelDefs和factory functions 的KernelRegistration
   TF_RETURN_IF_ERROR(FindKernelRegistration(device_type, ndef, &registration));
 
   if (registration != nullptr) {
@@ -692,6 +696,7 @@ Status MemoryTypesForNode(const OpRegistryInterface* op_registry,
   if (op_def == nullptr) return status;
 
   NameRangeMap inputs, outputs;
+  // [R] 得到 op 中每个输入参数，对应到 edge 的 index 的 begin 和 end
   status = NameRangesForNode(ndef, *op_def, &inputs, &outputs);
   if (!status.ok()) return status;
 

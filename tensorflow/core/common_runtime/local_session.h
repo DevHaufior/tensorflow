@@ -96,6 +96,7 @@ class LocalSession : public Session {
   // is true, such as "params" and "queue" nodes.  Once placed these
   // nodes can not be moved to a different device.  Maps node names to
   // device names.
+  
   std::unordered_map<string, string> stateful_placements_ GUARDED_BY(mu_);
 
   // For generating unique names.

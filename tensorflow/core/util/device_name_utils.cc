@@ -83,6 +83,7 @@ string DeviceNameUtils::FullName(const string& job, int replica, int task,
 }
 
 bool DeviceNameUtils::ParseFullName(StringPiece fullname, ParsedName* p) {
+  // [R] 解析 FullName 的地方
   p->Clear();
   if (fullname == "/") {
     return true;

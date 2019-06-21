@@ -29,7 +29,7 @@ class StepStatsCollector;
 class Executor {
  public:
   virtual ~Executor() {}
-
+  // [R] 关于 Executor，下面已经表述了很多
   // RunAsync() executes the graph computation. "done" is run when the
   // graph computation completes. If any error happens during the
   // computation, "done" is run and the error is passed to "done".
@@ -57,7 +57,7 @@ class Executor {
   // returning/calling the DoneCallback as usual.
   //
   // RunAsync() dispatches closures to "runner". Typically, "runner"
-  // is backed up by a bounded threadpool.
+  // is backed up by a bounded threadpool. # [R]后台实际的计算由 Threadpool 驱动
   struct Args {
     Rendezvous* rendezvous = nullptr;
     StepStatsCollector* stats_collector = nullptr;

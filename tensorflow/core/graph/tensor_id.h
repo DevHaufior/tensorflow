@@ -11,6 +11,7 @@ namespace tensorflow {
 // Identifier for a tensor within a step.
 // first == operation_name, second == output_index
 // Note: does not own backing storage for name.
+// [R] tensorid 的构成 operation+name:output_index
 struct TensorId : public std::pair<StringPiece, int> {
   typedef std::pair<StringPiece, int> Base;
 

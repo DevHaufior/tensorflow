@@ -171,7 +171,7 @@ class Graph {
   // Constructs a graph with a single SOURCE (always id kSourceId) and a
   // single SINK (always id kSinkId) node, and an edge from SOURCE->SINK.
   //
-  // The graph can hold ops found in registry.
+  // The graph can hold ops found in registry. [R] 所以registry 其实是一个全局的，供所有 grpah 使用的 op 弹药库？
   explicit Graph(const OpRegistryInterface* registry);
   ~Graph();
 

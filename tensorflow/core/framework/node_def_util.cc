@@ -327,6 +327,7 @@ Status NameRangesHelper(const NodeDef& node_def,
   int num;
   for (const auto& arg : args) {
     TF_RETURN_IF_ERROR(ComputeArgRange(node_def, arg, op_def, &num));
+    // [R]其实是计算 op 里的每个参数对应到 Node 里 edge s 的 index 范围
     (*result)[arg.name()] = std::make_pair(start, start + num);
     start += num;
   }
